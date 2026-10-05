@@ -866,6 +866,7 @@ class CodeIORayPPOTrainer(ReasonRLRayPPOTrainer):
                 )
 
         shift_coef = float(self.config.azr.reward.get("shift_coef", 0.0))
+        shift_clip = float(self.config.azr.reward.get("shift_clip", 1.0))
         if self.use_reference_policy:
             with marked_timer(f'ref/{problem_type}', timing_raw):
                 ref_log_prob = self.ref_policy_wg.compute_ref_log_prob(batch)
@@ -1016,14 +1017,20 @@ class CodeIORayPPOTrainer(ReasonRLRayPPOTrainer):
                     )
                 )
             metrics.update(train_metrics)
-            if shift_coef != 0.0:
+            # Capability shift shapes the proposer (gen_*) reward only.  The
+            # solver (pred_*) keeps Absolute Zero's original reward.
+            if shift_coef != 0.0 and problem_type.startswith('gen_'):
                 ref_key = 'ref_log_prob' if 'ref_log_prob' in batch.batch else 'ref_log_probs'
                 if ref_key not in batch.batch:
                     raise RuntimeError("shift_coef requires a reference policy worker")
                 response_mask = batch.batch['response_mask'].to(dtype=reward_tensor.dtype)
-                shift = ((batch.batch['old_log_probs'] - batch.batch[ref_key]) * response_mask).sum(-1)
+                response_lengths = response_mask.sum(-1).clamp_min(1.0)
+                shift = ((batch.batch['old_log_probs'] - batch.batch[ref_key]) * response_mask).sum(-1) / response_lengths
                 terminal = response_mask.sum(-1).long().clamp_min(1) - 1
-                reward_tensor[torch.arange(len(batch), device=reward_tensor.device), terminal] += shift_coef * shift
+                # Keep the original Absolute Zero reward as the base, then apply
+                # the normalized and clipped current/base trajectory shift.
+                shift = torch.clamp(shift, min=-shift_clip, max=shift_clip)
+                reward_tensor[torch.arange(len(batch), device=reward_tensor.device), terminal] *= shift
                 train_metrics['reward/shift_mean'] = shift.detach().mean().item()
             batch.batch['token_level_scores'] = reward_tensor
 

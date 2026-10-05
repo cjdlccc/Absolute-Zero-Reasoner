@@ -551,8 +551,10 @@ azr:
       # - try
       # - except
   reward:
-    # Coefficient for capability-shift reward; zero preserves the original objective.
+    # Enable capability-shift reward on proposer batches; zero preserves the original objective.
     shift_coef: 0.0
+    # Absolute bound c for the normalized trajectory shift multiplier.
+    shift_clip: 1.0
     n_samples: 8
     extract_code_block: True
     code_f_reward_type: binary # [accuracy, binary]
